@@ -191,6 +191,7 @@ class PPOTrainer(BaseTrainer):
 
         self.model = model
         self.is_encoder_decoder = hasattr(self.model, "is_encoder_decoder")
+        
 
         if isinstance(ref_model, PreTrainedModelWrapper):
             self.ref_model = ref_model
@@ -934,33 +935,33 @@ class PPOTrainer(BaseTrainer):
      
     def evaluate(self, eval_dataset: Dataset, evaluate_ref_model: bool=False, fp16: bool=True, metric: str= None):
         # Initialize our Trainer
-
+        from tqdm import tqdm
         # Metric
         metric_function = map_name_to_metric_function(metric if metric else self.config.metric)
 
         def compute_metrics(eval_preds):
-            preds, labels = eval_preds
-            if isinstance(preds, tuple):
-                preds = preds[0]
+            # print(eval_preds)
+            preds, _ = eval_preds
+            
             decoded_preds = self.tokenizer.batch_decode(preds, skip_special_tokens=True)
             
             # Replace -100 in the labels as we can't decode them. 
-            # TODO: Maybe dont need
-            labels = np.where(labels != -100, labels, self.tokenizer.pad_token_id)
-            decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
-
+            # labels = np.where(labels != -100, labels, self.tokenizer.pad_token_id)
+            decoded_labels = self.tokenizer.batch_decode(eval_dataset['labels'], skip_special_tokens=True)
             result = metric_function(targets=decoded_labels, predictions=decoded_preds)
             result = {k: round(v * 100, 4) for k, v in result.items()}
             return result
         
         print("=========================Evaluate PPO Model===========================")
         training_args = Seq2SeqTrainingArguments(
+            output_dir = 'tmp/',
             do_eval=True,
             predict_with_generate=True,
             per_device_eval_batch_size=self.config.eval_batch_size,
             fp16=fp16,
             fp16_full_eval=fp16,
             generation_max_length=self.config.target_length,
+            generation_num_beams=4,
         )
         trainer = Seq2SeqTrainer(
             model=self.model,
@@ -977,7 +978,7 @@ class PPOTrainer(BaseTrainer):
         )
         metrics = predict_results.metrics
         metrics["predict_samples"] = len(eval_dataset)
-        trainer.log_metric("PPO Model Results", metrics)
+        trainer.log_metrics("PPO Model Results", metrics)
 
         if evaluate_ref_model:
             print("=========================Evaluate Ref Model===========================")
@@ -996,5 +997,5 @@ class PPOTrainer(BaseTrainer):
             )
             metrics = predict_results.metrics
             metrics["predict_samples"] = len(eval_dataset)
-            trainer.log_metric("Reference Model Results", metrics)
+            trainer.log_metrics("Reference Model Results", metrics)
 

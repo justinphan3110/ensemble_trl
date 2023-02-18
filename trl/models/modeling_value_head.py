@@ -107,7 +107,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             raise ValueError("The model does not have a language model head, please use a model that has one.")
 
         self.v_head = ValueHead(self.pretrained_model.config, **v_head_kwargs)
-
+        # self.main_input_name = "input_ids"
         self._init_weights(**v_head_kwargs)
 
     def _init_weights(self, **kwargs):
@@ -247,7 +247,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
             raise ValueError("The model does not have a language model head, please use a model that has one.")
 
         self.v_head = ValueHead(self.pretrained_model.config, **v_head_kwargs)
-
+        self.main_input_name = 'input_ids'
         self._init_weights(**v_head_kwargs)
 
     def _has_lm_head(self):
