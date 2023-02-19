@@ -933,69 +933,27 @@ class PPOTrainer(BaseTrainer):
         # self.create_model_card(save_directory)
 
      
-    def evaluate(self, eval_dataset: Dataset, evaluate_ref_model: bool=False, fp16: bool=True, metric: str= None):
+    def evaluate(self, eval_dataset: Dataset, evaluate_ref_model: bool=False, fp16: bool=True, metric: str= None, **generation_kwargs):
         # Initialize our Trainer
         from tqdm import tqdm
         # Metric
         metric_function = map_name_to_metric_function(metric if metric else self.config.metric)
-
-        def compute_metrics(eval_preds):
-            # print(eval_preds)
-            preds, _ = eval_preds
-            
-            decoded_preds = self.tokenizer.batch_decode(preds, skip_special_tokens=True)
-            
-            # Replace -100 in the labels as we can't decode them. 
-            # labels = np.where(labels != -100, labels, self.tokenizer.pad_token_id)
-            decoded_labels = self.tokenizer.batch_decode(eval_dataset['labels'], skip_special_tokens=True)
-            result = metric_function(targets=decoded_labels, predictions=decoded_preds)
+        def compute_metrics(labels, preds):
+            result = metric_function(targets=labels, predictions=preds)
             result = {k: round(v * 100, 4) for k, v in result.items()}
             return result
-        
-        print("=========================Evaluate PPO Model===========================")
-        training_args = Seq2SeqTrainingArguments(
-            output_dir = 'tmp/',
-            do_eval=True,
-            predict_with_generate=True,
-            per_device_eval_batch_size=self.config.eval_batch_size,
-            fp16=fp16,
-            fp16_full_eval=fp16,
-            generation_max_length=self.config.target_length,
-            generation_num_beams=4,
-        )
-        trainer = Seq2SeqTrainer(
-            model=self.model,
-            args=training_args,
-            train_dataset=None,
-            eval_dataset=eval_dataset,
-            tokenizer=self.tokenizer,
-            data_collator=self.data_collator,
-            compute_metrics=compute_metrics if training_args.predict_with_generate else None,
-            )
-        
-        predict_results = trainer.predict(
-            eval_dataset, metric_key_prefix="predict", max_length=self.config.target_length
-        )
-        metrics = predict_results.metrics
-        metrics["predict_samples"] = len(eval_dataset)
-        trainer.log_metrics("PPO Model Results", metrics)
 
-        if evaluate_ref_model:
-            print("=========================Evaluate Ref Model===========================")
-            trainer = Seq2SeqTrainer(
-                model=self.ref_model,
-                args=training_args,
-                train_dataset=None,
-                eval_dataset=eval_dataset,
-                tokenizer=self.tokenizer,
-                data_collator=self.data_collator,
-                compute_metrics=compute_metrics if training_args.predict_with_generate else None,
-                )
-            
-            predict_results = trainer.predict(
-                eval_dataset, metric_key_prefix="predict", max_length=self.config.target_length
-            )
-            metrics = predict_results.metrics
-            metrics["predict_samples"] = len(eval_dataset)
-            trainer.log_metrics("Reference Model Results", metrics)
+        dataloader = torch.utils.data.DataLoader(eval_dataset, collate_fn=self.data_collator, batch_size=self.config.eval_batch_size)
+        decoded_preds = []
+        for batch in tqdm(dataloader):
+            input_ids = torch.stack([tensor.to(self.accelerator.device) for tensor in batch['input_ids']])
+            response = self.generate(input_ids, **generation_kwargs)
+            decoded_pred = self.tokenizer.batch_decode(response, skip_special_tokens=True)
+            decoded_preds.extend(decoded_pred)
 
+        
+        labels = eval_dataset['labels']
+        labels = np.where(labels != -100, labels, self.tokenizer.pad_token_id)
+        decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
+        result = compute_metrics(decoded_labels, decoded_preds)
+        print(result)
